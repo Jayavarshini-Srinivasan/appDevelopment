@@ -1,0 +1,38 @@
+{
+  "expo": {
+    "name": "RapidAid Patient",
+    "slug": "rapidaid-patient",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#E63946"
+    },
+    "ios": {
+      "bundleIdentifier": "com.rapidaid.patient"
+    },
+    "android": {
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION"
+      ],
+      "config": {
+        "googleMaps": {
+          "apiKey": "YOUR_GOOGLE_MAPS_API_KEY"
+        }
+      }
+    },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow RapidAid to use your location for emergency requests."
+        }
+      ]
+    ]
+  }
+}
+
