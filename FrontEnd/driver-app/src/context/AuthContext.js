@@ -19,10 +19,16 @@ export const AuthProvider = ({ children }) => {
   const [userData, setUserData] = useState(null);
 
   useEffect(() => {
+    if (!auth) {
+      console.warn('AuthContext: Firebase auth not initialized. Check Firebase configuration.');
+      setLoading(false);
+      return;
+    }
+
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       console.log('🔐 Auth state changed:', firebaseUser ? 'User logged in' : 'No user');
       if (firebaseUser) {
-        console.log('👤 User UID:', firebaseUser.uid);
+        console.log('��� User UID:', firebaseUser.uid);
         setUser(firebaseUser);
         try {
           const meResponse = await api.get('/auth/me');
@@ -47,15 +53,17 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   const login = async (email, password) => {
+    if (!auth) throw new Error('Firebase not configured. Please set Firebase credentials.');
     const userCredential = await signInWithEmailAndPassword(auth, email, password);
     return userCredential.user;
   };
 
   const register = async (email, password, userData) => {
+    if (!auth) throw new Error('Firebase not configured. Please set Firebase credentials.');
     try {
       // Create user in Firebase Auth
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-      
+
       // Prepare comprehensive driver data
       const driverData = {
         email,
@@ -80,11 +88,9 @@ export const AuthProvider = ({ children }) => {
         lastActive: new Date().toISOString()
       };
 
-      // Store user data in Firestore
+      // Store user data in backend via API
       await api.post('/auth/register', { email, password, ...driverData });
-      
-      // Note: Driver stats will be created when driver first logs in
-      
+
       return userCredential.user;
     } catch (error) {
       console.error('Registration error:', error);
@@ -93,6 +99,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   const logout = async () => {
+    if (!auth) return;
     await signOut(auth);
   };
 
@@ -102,4 +109,3 @@ export const AuthProvider = ({ children }) => {
     </AuthContext.Provider>
   );
 };
-

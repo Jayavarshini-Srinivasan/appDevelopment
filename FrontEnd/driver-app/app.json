@@ -9,12 +9,25 @@
       "resizeMode": "contain",
       "backgroundColor": "#0A6CF1"
     },
+    "extra": {
+      "FIREBASE_API_KEY": "AIzaSyDGUwEaC9le1MexL5MCd60aqGpAIaQHiRQ",
+      "FIREBASE_AUTH_DOMAIN": "rapidaid-8a617.firebaseapp.com",
+      "FIREBASE_PROJECT_ID": "rapidaid-8a617",
+      "FIREBASE_STORAGE_BUCKET": "rapidaid-8a617.firebasestorage.app",
+      "FIREBASE_MESSAGING_SENDER_ID": "406348450924",
+      "FIREBASE_APP_ID": "1:406348450924:web:e1a1fec111b118f730dc49",
+      "API_URL": "http://localhost:5002/api"
+    },
     "ios": {
       "bundleIdentifier": "com.rapidaid.driver"
     },
     "android": {
       "package": "com.rapidaid.driver",
-      "permissions": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "ACCESS_BACKGROUND_LOCATION"]
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION"
+      ]
     },
     "plugins": [
       [
@@ -27,4 +40,3 @@
     ]
   }
 }
-

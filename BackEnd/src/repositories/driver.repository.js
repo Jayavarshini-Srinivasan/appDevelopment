@@ -34,6 +34,29 @@ const getAllLiveLocations = async () => {
 };
 
 const getDriverStats = async (driverId) => {
+  // Prefer precomputed driverStats doc if available
+  try {
+    const statsRef = db.collection('driverStats').doc(driverId);
+    const statsDoc = await statsRef.get();
+    if (statsDoc.exists) {
+      const data = statsDoc.data();
+      // Normalize fields if necessary
+      return {
+        totalCompleted: data.totalCompleted || 0,
+        completedToday: data.completedToday || 0,
+        completedThisWeek: data.completedThisWeek || 0,
+        averageRating: data.averageRating || 0,
+        totalDistance: data.totalDistance || 0,
+        totalHours: data.totalHours || 0,
+        emergencyTypes: data.emergencyTypes || {}
+      };
+    }
+  } catch (err) {
+    // Ignore and fallback to on-the-fly computation
+    console.warn('driver.repository.getDriverStats: driverStats lookup failed', err?.message || err);
+  }
+
+  // Compute from emergency documents as a fallback
   const emergenciesRef = db.collection('emergencies');
   const completed = await emergenciesRef
     .where('driverId', '==', driverId)
@@ -48,9 +71,22 @@ const getDriverStats = async (driverId) => {
     return data.completedAt && data.completedAt.toDate() >= today;
   });
 
+  // Build emergencyType counts as best effort from emergencies list
+  const emergencyTypes = {};
+  completed.docs.forEach(docSnapshot => {
+    const data = docSnapshot.data();
+    const type = data.emergencyType || data.type || 'Other';
+    emergencyTypes[type] = (emergencyTypes[type] || 0) + 1;
+  });
+
   return {
     totalCompleted: completed.size,
     completedToday: completedToday.length,
+    emergencyTypes,
+    averageRating: 0,
+    completedThisWeek: 0,
+    totalDistance: 0,
+    totalHours: 0
   };
 };
 

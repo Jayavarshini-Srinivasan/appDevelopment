@@ -98,10 +98,43 @@ const updateUserProfile = async (userId, profileData) => {
   return { id: updatedDoc.id, ...updatedDoc.data() };
 };
 
+const createTestUser = async (email, password, userData) => {
+  console.log('🧪 Creating test user:', email);
+  
+  // For development: create a mock user in Firestore without Firebase Auth
+  // This allows testing without Admin SDK credentials
+  
+  const uid = Buffer.from(email).toString('base64').substring(0, 28);
+  
+  const userRef = db.collection('users').doc(uid);
+  const userData_final = {
+    email,
+    role: userData.role || 'patient',
+    name: userData.name || email.split('@')[0],
+    isActive: true,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...userData
+  };
+  
+  await userRef.set(userData_final, { merge: true });
+  console.log('✅ Test user created in Firestore:', uid);
+  
+  // Generate a mock token for development
+  const mockToken = Buffer.from(JSON.stringify({
+    uid,
+    email,
+    role: userData.role || 'patient'
+  })).toString('base64');
+  
+  return { uid, email, token: mockToken, ...userData_final };
+};
+
 module.exports = {
   register,
   login,
   getCurrentUser,
   updateUserProfile,
+  createTestUser,
 };
 

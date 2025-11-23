@@ -3,55 +3,67 @@ import { auth } from '../../firebaseConfig';
 import { Platform, NativeModules } from 'react-native';
 import Constants from 'expo-constants';
 
+const isLocalHost = (h) => ['localhost', '127.0.0.1', '::1', '0.0.0.0'].includes(h);
+
 const resolveMobileHost = () => {
-  const hostUri = Constants?.expoConfig?.hostUri || Constants?.manifest?.debuggerHost;
+  // Try multiple expo/debugger sources to extract the device-visible host IP
+  const hostCandidates = [];
+  const hostUri = Constants?.expoConfig?.hostUri || Constants?.manifest?.debuggerHost || '';
   if (hostUri) {
     const clean = hostUri.replace('exp://', '').replace('http://', '').replace('https://', '');
-    const host = clean.split(':')[0];
-    if (host && host !== 'localhost' && host !== '127.0.0.1') return host;
+    hostCandidates.push(clean.split(':')[0]);
   }
   const scriptURL = NativeModules?.SourceCode?.scriptURL || '';
   if (scriptURL) {
     const clean = scriptURL.replace('exp://', '').replace('http://', '').replace('https://', '');
-    const host = clean.split(':')[0];
-    if (host && host !== 'localhost' && host !== '127.0.0.1') return host;
+    hostCandidates.push(clean.split(':')[0]);
   }
+
+  for (const h of hostCandidates) {
+    if (!h) continue;
+    if (!isLocalHost(h)) return h;
+  }
+
+  // No usable host from expo manifest; fall back to platform-specific defaults
   if (Platform.OS === 'android') return '10.0.2.2';
-  return 'localhost';
+  return '127.0.0.1';
 };
 
 const sanitizeUrl = (u) => (u || '').replace(/['"`]/g, '').trim();
 
 const resolveBaseUrl = () => {
+  const extra = (Constants?.expoConfig?.extra || Constants?.manifest?.extra || {});
   if (Platform.OS === 'web') {
-    const webEnv = sanitizeUrl(process.env.VITE_API_URL);
+    const webEnv = sanitizeUrl(process.env.VITE_API_URL || extra.API_URL);
     if (webEnv) return webEnv;
     const host = typeof window !== 'undefined' ? window.location.hostname : '127.0.0.1';
-    return `http://${host}:5000/api`;
+    return `http://${host}:5002/api`;
   }
 
-  // Prefer Expo LAN IP when available
   const hostFromExpo = resolveMobileHost();
 
-  // Use env if set, unless it's localhost/127/10.0.2.2 while we have a LAN IP
-  const mobileEnv = sanitizeUrl(process.env.EXPO_PUBLIC_API_URL);
+  // Use env if set, but translate to the expo host when env uses localhost
+  const mobileEnv = sanitizeUrl(process.env.EXPO_PUBLIC_API_URL || extra.API_URL);
   if (mobileEnv) {
     try {
       const url = new URL(mobileEnv);
       const envHost = url.hostname;
-      const badHosts = ['localhost', '127.0.0.1'];
-      const isPrivateLan = /^(10\.|127\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(hostFromExpo);
-      if ((badHosts.includes(envHost) || envHost === '10.0.2.2') && hostFromExpo && isPrivateLan) {
-        return `http://${hostFromExpo}:5000/api`;
+      const envPort = url.port || '5002';
+      const envProtocol = url.protocol || 'http:';
+      if (isLocalHost(envHost) && hostFromExpo) {
+        const chosen = `${envProtocol}//${hostFromExpo}:${envPort}/api`;
+        console.log('[API] Translated mobile ENV host', mobileEnv, '->', chosen);
+        return chosen;
       }
       return mobileEnv;
-    } catch {
-      // If parsing fails, fall back
-      return `http://${hostFromExpo}:5000/api`;
+    } catch (e) {
+      if (hostFromExpo) return `http://${hostFromExpo}:5002/api`;
+      return Platform.OS === 'android' ? `http://10.0.2.2:5002/api` : `http://127.0.0.1:5002/api`;
     }
   }
 
-  return `http://${hostFromExpo}:5000/api`;
+  if (hostFromExpo) return `http://${hostFromExpo}:5002/api`;
+  return Platform.OS === 'android' ? `http://10.0.2.2:5002/api` : `http://127.0.0.1:5002/api`;
 };
 
 const API_BASE_URL = resolveBaseUrl();
@@ -89,7 +101,16 @@ api.interceptors.response.use(
     return response;
   },
   (error) => {
-    console.error('API Response Error:', error.config?.url, error.response?.status, error.response?.data?.message);
+    const url = error?.config?.url;
+    const status = error?.response?.status;
+    // try to get better message
+    const message = (error?.response?.data && (typeof error?.response?.data === 'string' ? error?.response?.data : error?.response?.data?.message)) || error?.message || error?.toString() || 'Unknown error';
+    if (status == null) {
+      // No HTTP response received -> network/base URL issue
+      console.error('API Response Error (network):', url, message, 'BaseURL:', api.defaults.baseURL);
+    } else {
+      console.error('API Response Error:', url, status, message);
+    }
     return Promise.reject(error);
   }
 );
@@ -117,20 +138,29 @@ const tryHosts = async () => {
   add('localhost');
   add('127.0.0.1');
 
+  // If we have a hostFromExpo, prefer it
+  const hostFromExpo = resolveMobileHost();
+  if (hostFromExpo && !candidates.includes(hostFromExpo)) add(hostFromExpo);
+
+  const ports = ['5002', '5001', '5000'];
   for (const host of candidates) {
-    if (!host || host === 'localhost' || host === '127.0.0.1') continue;
-    const url = `http://${host}:5000/health`;
-    try {
-      const res = await fetch(url, { method: 'GET' });
-      if (res.ok) {
-        const newBase = `http://${host}:5000/api`;
-        if (api.defaults.baseURL !== newBase) {
-          api.defaults.baseURL = newBase;
-          console.log('API base URL updated after health-check:', newBase);
+    if (!host) continue;
+    for (const port of ports) {
+      const url = `http://${host}:${port}/health`;
+      try {
+        const res = await fetch(url, { method: 'GET' });
+        if (res.ok) {
+          const newBase = `http://${host}:${port}/api`;
+          if (api.defaults.baseURL !== newBase) {
+            api.defaults.baseURL = newBase;
+            console.log('API base URL updated after health-check:', newBase);
+          }
+          return;
         }
-        return;
+      } catch (e) {
+        // continue
       }
-    } catch (e) {}
+    }
   }
 };
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, ScrollView, Alert, Image } from 'react-native';
 import * as Location from 'expo-location';
 import { db } from '../../firebaseConfig';
@@ -15,8 +15,20 @@ export default function DashboardScreen({ navigation }) {
   const [pendingRequests, setPendingRequests] = useState(0);
   const [assignedRequests, setAssignedRequests] = useState(0);
   const [isTracking, setIsTracking] = useState(false);
+  const watchRef = useRef(null);
 
   useEffect(() => {
+    if (!user) {
+      console.log('Dashboard: user not logged in, skipping dashboard updates');
+      // Clear dashboard data when logged out
+      setStats({ totalCompleted: 0, completedToday: 0, rating: 0 });
+      setCurrentLocation(null);
+      setPendingRequests(0);
+      setAssignedRequests(0);
+      setIsOnDuty(false);
+      return;
+    }
+
     loadDashboardData();
     loadEmergencyRequests();
     loadDutyStatus();
@@ -28,7 +40,7 @@ export default function DashboardScreen({ navigation }) {
     }, 30000);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     if (isOnDuty) {
@@ -38,18 +50,27 @@ export default function DashboardScreen({ navigation }) {
     }
   }, [isOnDuty]);
 
+  // Cleanup watcher on unmount
+  useEffect(() => {
+    return () => {
+      stopLocationTracking();
+    };
+  }, []);
+
   useEffect(() => {
     const unsubscribe = navigation.addListener('focus', () => {
+      if (!user) return;
       loadEmergencyRequests();
       loadDashboardData();
       loadDutyStatus();
     });
     return unsubscribe;
-  }, [navigation]);
+  }, [navigation, user]);
 
   const loadDashboardData = async () => {
     try {
       console.log('📊 Loading dashboard data...');
+      console.log('API baseURL:', api.defaults.baseURL);
       const [statsResponse, locationResponse] = await Promise.all([
         api.get('/driver/stats'),
         api.get('/driver/location/current')
@@ -62,11 +83,14 @@ export default function DashboardScreen({ navigation }) {
         setStats(statsResponse.data.data);
       }
       
-      if (locationResponse.data.data) {
+      if (locationResponse && locationResponse.data && typeof locationResponse.data.data !== 'undefined') {
         setCurrentLocation(locationResponse.data.data);
+      } else {
+        console.warn('⚠️ Location response missing data:', locationResponse?.data || locationResponse);
+        setCurrentLocation(null);
       }
     } catch (error) {
-      console.error('❌ Error loading dashboard data:', error);
+      console.error('❌ Error loading dashboard data:', error.message || error);
       console.error('❌ Error response:', error.response?.data);
       console.error('❌ Error status:', error.response?.status);
     }
@@ -121,6 +145,10 @@ export default function DashboardScreen({ navigation }) {
   };
 
   const startLocationTracking = async () => {
+    if (!user) {
+      Alert.alert('Authentication required', 'Please log in to start location tracking');
+      return;
+    }
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
@@ -138,7 +166,7 @@ export default function DashboardScreen({ navigation }) {
       await updateDriverLocation(currentLocation.coords);
 
       // Watch for location changes
-      Location.watchPositionAsync(
+      const sub = await Location.watchPositionAsync(
         {
           accuracy: Location.Accuracy.High,
           timeInterval: 10000, // Update every 10 seconds
@@ -148,6 +176,11 @@ export default function DashboardScreen({ navigation }) {
           await updateDriverLocation(location.coords);
         }
       );
+      // Save subscription so we can stop watching later
+      if (watchRef.current) {
+        try { await watchRef.current.remove(); } catch {}
+      }
+      watchRef.current = sub;
     } catch (error) {
       console.error('Error starting location tracking:', error);
       Alert.alert('Error', 'Failed to start location tracking');
@@ -156,9 +189,19 @@ export default function DashboardScreen({ navigation }) {
 
   const stopLocationTracking = () => {
     setIsTracking(false);
+    if (watchRef.current) {
+      try {
+        watchRef.current.remove();
+      } catch {}
+      watchRef.current = null;
+    }
   };
 
   const updateDriverLocation = async (coords) => {
+    if (!user) {
+      console.warn('Skipping updateDriverLocation - user not logged in');
+      return;
+    }
     try {
       const { latitude, longitude } = coords;
       // Update via API only (avoid client Firestore writes on mobile)
@@ -192,7 +235,7 @@ export default function DashboardScreen({ navigation }) {
 
   const getLocationStatus = () => {
     if (!isOnDuty) return 'Not tracking (Off Duty)';
-    if (isTracking && currentLocation) return 'Location Active';
+    if (currentLocation) return 'Location Active';
     if (isTracking) return 'Acquiring location...';
     return 'Location unavailable';
   };

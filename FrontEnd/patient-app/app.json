@@ -3,6 +3,7 @@
     "name": "RapidAid Patient",
     "slug": "rapidaid-patient",
     "version": "1.0.0",
+    "sdkVersion": "54.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -32,7 +33,19 @@
           "locationWhenInUsePermission": "Allow RapidAid to use your location for emergency requests."
         }
       ]
-    ]
+    ],
+    "extra": {
+      "FIREBASE_API_KEY": "AIzaSyDGUwEaC9le1MexL5MCd60aqGpAIaQHiRQ",
+      "FIREBASE_AUTH_DOMAIN": "rapidaid-8a617.firebaseapp.com",
+      "FIREBASE_PROJECT_ID": "rapidaid-8a617",
+      "FIREBASE_STORAGE_BUCKET": "rapidaid-8a617.firebasestorage.app",
+      "FIREBASE_MESSAGING_SENDER_ID": "406348450924",
+      "FIREBASE_APP_ID": "1:406348450924:web:e1a1fec111b118f730dc49",
+      "API_URL": "http://localhost:5001/api",
+      "CREATE_TEST_USER": true,
+      "TEST_EMAIL": "patient.test002@rapidaid.dev",
+      "TEST_PASSWORD": "RapidAidTest!2025"
+    }
   }
 }
 

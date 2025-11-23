@@ -55,5 +55,21 @@ const updateProfile = async (req, res) => {
   }
 };
 
-module.exports = { register, login, getMe, updateProfile };
+const createTestUser = async (req, res) => {
+  try {
+    // Development only
+    if (process.env.NODE_ENV === 'production') {
+      return errorResponse(res, 'Test user creation disabled in production', 403);
+    }
+    
+    const { email = 'patient.test002@rapidaid.dev', password = 'RapidAidTest!2025', name = 'Test Patient' } = req.body;
+    const result = await authService.createTestUser(email, password, { name, role: 'patient' });
+    return successResponse(res, result, 'Test user created successfully', 201);
+  } catch (error) {
+    console.error('❌ Test user creation error:', error);
+    return errorResponse(res, error.message, 400);
+  }
+};
+
+module.exports = { register, login, getMe, updateProfile, createTestUser };
 

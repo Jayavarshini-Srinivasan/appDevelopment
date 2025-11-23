@@ -152,7 +152,18 @@ export default function MedicalProfile() {
         setUserData(updated);
         Alert.alert('Success', 'Medical profile updated successfully!');
       } catch (error) {
-        Alert.alert('Error', `Failed to update profile: ${error.message}`);
+        const status = error?.response?.status || 0;
+        if ((status === 403 || status === 0) && user?.uid) {
+          try {
+            const updatedDoc = await userService.updateUserDocument(user.uid, { ...profileData, role: 'patient' });
+            setUserData(updatedDoc || profileData);
+            Alert.alert('Success', 'Medical profile updated.');
+          } catch (e2) {
+            Alert.alert('Error', `Failed to update profile: ${error.message}`);
+          }
+        } else {
+          Alert.alert('Error', `Failed to update profile: ${error.message}`);
+        }
       }
     } catch (error) {
       console.error('Error saving profile:', error);

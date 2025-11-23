@@ -5,7 +5,7 @@ const { verifyToken } = require('../middlewares/auth.middleware');
 const { requireRole } = require('../middlewares/role.middleware');
 
 router.use(verifyToken);
-router.use(requireRole('driver', 'patient'));
+router.use(requireRole('driver'));
 
 router.post('/duty/toggle', driverController.toggleDutyStatus);
 router.post('/location', driverController.updateLocation);

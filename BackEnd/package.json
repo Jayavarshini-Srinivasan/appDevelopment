@@ -8,7 +8,8 @@
     "dev": "nodemon src/server.js",
     "seed": "node seed.js",
     "seed:emergencies": "node seed-emergencies.js",
-    "seed:patients": "node seed-patients.js"
+    "seed:patients": "node seed-patients.js",
+    "set:role": "node set-user-role.js"
   },
   "dependencies": {
     "express": "^4.18.2",

@@ -20,7 +20,9 @@ export default function LoginScreen({ navigation }) {
 
   const handleLogin = async () => {
     try {
-      await login(email, password);
+      const cleanEmail = (email || '').trim();
+      const cleanPassword = (password || '').trim();
+      await login(cleanEmail, cleanPassword);
       // The navigation will be handled automatically by the AuthContext
       // when user state changes, so we don't need to navigate manually
       console.log('Login successful');

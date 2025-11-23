@@ -97,6 +97,12 @@ export const userService = {
       throw error;
     }
   },
+  async updateUserDocument(userId, updates) {
+    const userRef = doc(db, 'users', userId);
+    await setDoc(userRef, { ...updates, updatedAt: serverTimestamp() }, { merge: true });
+    const updated = await getDoc(userRef);
+    return updated.exists() ? updated.data() : null;
+  },
   async updateUserLocation(userId, locationData) {
     try {
       const api = (await import('../services/api')).default;

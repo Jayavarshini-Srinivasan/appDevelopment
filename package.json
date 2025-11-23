@@ -16,6 +16,12 @@
     "driver:start": "cd frontend/driver-app && npm start",
     "admin:dev": "cd frontend/admin-dashboard && npm run dev",
     "install:all": "npm install && cd backend && npm install && cd ../frontend/patient-app && npm install && cd ../driver-app && npm install && cd ../admin-dashboard && npm install"
+  },
+  "overrides": {
+    "react": "19.1.0",
+    "react-dom": "19.1.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0"
   }
 }
-

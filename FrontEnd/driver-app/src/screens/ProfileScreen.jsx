@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, ScrollView, Alert } from 'react-native';
 import { useAuth } from '../context/AuthContext';
 import api from '../services/api';
-import { auth } from '../../firebaseConfig';
+import { auth, db } from '../../firebaseConfig';
+import { doc, getDoc } from 'firebase/firestore';
 
 export default function ProfileScreen() {
   const { userData, logout } = useAuth();
@@ -16,6 +17,13 @@ export default function ProfileScreen() {
   const [fetching, setFetching] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
 
+  // Connectivity states
+  const [backendStatus, setBackendStatus] = useState('unknown'); // 'ok' | 'failed' | 'checking'
+  const [firestoreBackendStatus, setFirestoreBackendStatus] = useState('unknown'); // backend view of Firestore
+  const [firestoreClientStatus, setFirestoreClientStatus] = useState('unknown'); // client SDK connection
+  const [checkingConnectivity, setCheckingConnectivity] = useState(false);
+  const [lastChecked, setLastChecked] = useState(null);
+
   useEffect(() => {
     loadProfile();
   }, []);
@@ -23,6 +31,7 @@ export default function ProfileScreen() {
   const loadProfile = async () => {
     try {
       console.log('Loading profile data...');
+      console.log('API baseURL:', api.defaults.baseURL);
       
       // Load user profile from auth/me
       console.log('Calling /auth/me...');
@@ -74,6 +83,8 @@ export default function ProfileScreen() {
       }
     } finally {
       setFetching(false);
+      // Run connectivity check after we fetch profile
+      checkConnectivity();
     }
   };
 
@@ -107,7 +118,9 @@ export default function ProfileScreen() {
       await loadProfile();
     } catch (error) {
       console.error('Error updating profile:', error);
-      Alert.alert('Error', 'Failed to update profile');
+      const status = error?.response?.status;
+      const backendMsg = error?.response?.data?.message || error?.message || 'Unknown error';
+      Alert.alert('Error', `Failed to update profile: ${backendMsg}${status ? ` (status ${status})` : ''}`);
     } finally {
       setLoading(false);
     }
@@ -119,6 +132,58 @@ export default function ProfileScreen() {
       loadProfile();
     }
     setIsEditing(!isEditing);
+  };
+
+  const checkConnectivity = async () => {
+    setCheckingConnectivity(true);
+    setBackendStatus('checking');
+    setFirestoreBackendStatus('checking');
+    setFirestoreClientStatus('checking');
+
+    try {
+      // Backend health check - call root /health (not under /api)
+      try {
+        const baseHost = api.defaults.baseURL.replace(/\/api\/?$/, '');
+        const backendHealthUrl = `${baseHost}/health`;
+        const res = await fetch(backendHealthUrl);
+        setBackendStatus(res.ok ? 'ok' : 'failed');
+      } catch (err) {
+        setBackendStatus('failed');
+        console.error('Backend health check failed:', err);
+      }
+
+      // Backend's Firestore connectivity check, via API endpoint
+      try {
+        const healthFs = await api.get('/health/firestore');
+        setFirestoreBackendStatus(healthFs?.data?.status === 'ok' ? 'ok' : 'failed');
+      } catch (err) {
+        setFirestoreBackendStatus('failed');
+        console.error('Backend firestore check failed:', err);
+      }
+
+      // Client-side Firestore SDK check (attempt to read users/<uid>)
+      try {
+        if (!db) {
+          throw new Error('Firestore client not configured');
+        }
+        const uid = auth?.currentUser?.uid;
+        if (!uid) {
+          // If not logged in, we still consider client SDK initialized
+          setFirestoreClientStatus('ok');
+        } else {
+          const userDocRef = doc(db, 'users', uid);
+          const docSnap = await getDoc(userDocRef);
+          setFirestoreClientStatus(docSnap.exists() ? 'ok' : 'failed');
+        }
+      } catch (err) {
+        setFirestoreClientStatus('failed');
+        console.error('Client Firestore check failed:', err);
+      }
+
+      setLastChecked(new Date());
+    } finally {
+      setCheckingConnectivity(false);
+    }
   };
 
   if (fetching) {
@@ -143,21 +208,44 @@ export default function ProfileScreen() {
         </TouchableOpacity>
       </View>
 
+      {/* Connectivity Status */}
+      <View style={styles.connectivityContainer}>
+        <View style={styles.connectivityItem}>
+          <View style={[styles.connectivityDot, backendStatus === 'ok' ? styles.connected : styles.disconnected]} />
+          <Text style={styles.connectivityLabel}>Backend</Text>
+          <Text style={styles.connectivityValue}>{backendStatus}</Text>
+        </View>
+        <View style={styles.connectivityItem}>
+          <View style={[styles.connectivityDot, firestoreBackendStatus === 'ok' ? styles.connected : styles.disconnected]} />
+          <Text style={styles.connectivityLabel}>Backend → Firestore</Text>
+          <Text style={styles.connectivityValue}>{firestoreBackendStatus}</Text>
+        </View>
+        <View style={styles.connectivityItem}>
+          <View style={[styles.connectivityDot, firestoreClientStatus === 'ok' ? styles.connected : styles.disconnected]} />
+          <Text style={styles.connectivityLabel}>Firestore (Client)</Text>
+          <Text style={styles.connectivityValue}>{firestoreClientStatus}</Text>
+        </View>
+        <TouchableOpacity style={styles.checkButton} onPress={checkConnectivity} disabled={checkingConnectivity}>
+          {checkingConnectivity ? <ActivityIndicator color="#fff" /> : <Text style={styles.checkButtonText}>Check</Text>}
+        </TouchableOpacity>
+      </View>
+      <Text style={styles.lastChecked}>Last checked: {lastChecked ? new Date(lastChecked).toLocaleString() : 'Never'}</Text>
+
       {/* Driver Summary Card */}
       {driverProfile && (
         <View style={styles.summaryCard}>
           <Text style={styles.summaryTitle}>Driver Summary</Text>
           <View style={styles.summaryRow}>
             <View style={styles.summaryItem}>
-              <Text style={styles.summaryValue}>{driverProfile.totalCompleted || 0}</Text>
+              <Text style={styles.summaryValue}>{driverProfile.stats?.totalCompleted || 0}</Text>
               <Text style={styles.summaryLabel}>Total Emergencies</Text>
             </View>
             <View style={styles.summaryItem}>
-              <Text style={styles.summaryValue}>{driverProfile.completedToday || 0}</Text>
+              <Text style={styles.summaryValue}>{driverProfile.stats?.completedToday || 0}</Text>
               <Text style={styles.summaryLabel}>Today</Text>
             </View>
             <View style={styles.summaryItem}>
-              <Text style={styles.summaryValue}>{driverProfile.rating || 0}</Text>
+              <Text style={styles.summaryValue}>{driverProfile.stats?.averageRating || driverProfile.rating || 0}</Text>
               <Text style={styles.summaryLabel}>Rating</Text>
             </View>
           </View>
@@ -228,11 +316,11 @@ export default function ProfileScreen() {
       </View>
 
       {/* Emergency Statistics */}
-      {driverProfile && driverProfile.emergencyTypes && (
+      {driverProfile && (driverProfile.stats?.emergencyTypes || driverProfile.emergencyTypes) && (
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Emergency Response Statistics</Text>
           <View style={styles.statsContainer}>
-            {Object.entries(driverProfile.emergencyTypes).map(([type, count]) => (
+            {Object.entries(driverProfile.stats?.emergencyTypes || driverProfile.emergencyTypes || {}).map(([type, count]) => (
               <View key={type} style={styles.statItem}>
                 <Text style={styles.statType}>{type}</Text>
                 <Text style={styles.statCount}>{count}</Text>
@@ -299,6 +387,59 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 14,
     fontWeight: '600',
+  },
+  connectivityContainer: {
+    marginHorizontal: 15,
+    marginTop: 12,
+    backgroundColor: '#fff',
+    padding: 12,
+    borderRadius: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  connectivityItem: {
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  connectivityDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    marginBottom: 4,
+  },
+  connected: {
+    backgroundColor: '#16A34A',
+  },
+  disconnected: {
+    backgroundColor: '#EF4444',
+  },
+  connectivityLabel: {
+    fontSize: 12,
+    color: '#374151',
+  },
+  connectivityValue: {
+    fontSize: 12,
+    color: '#6B7280',
+  },
+  checkButton: {
+    backgroundColor: '#0A6CF1',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    marginLeft: 10,
+  },
+  checkButtonText: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+  lastChecked: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginHorizontal: 15,
+    marginTop: 8,
+    marginBottom: 8,
   },
   summaryCard: {
     backgroundColor: '#fff',

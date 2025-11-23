@@ -10,15 +10,27 @@ const mlRoutes = require('./routes/ml.routes');
 
 const app = express();
 
+const allowedOrigins = [
+  'http://localhost:8081',
+  'http://127.0.0.1:8081',
+  'http://localhost:8082',
+  'http://127.0.0.1:8082',
+  'http://localhost:8083',
+  'http://127.0.0.1:8083',
+  'http://localhost:19000',
+  'http://localhost:19001',
+  'http://localhost:19002',
+  'http://localhost:19005',
+  'http://localhost:19006',
+  'http://127.0.0.1:19000',
+  'http://127.0.0.1:19001',
+  'http://127.0.0.1:19002',
+  'http://127.0.0.1:19006'
+];
+const originOption = process.env.NODE_ENV === 'production' ? allowedOrigins : true;
+
 app.use(cors({
-  origin: [
-    'http://localhost:8081',
-    'http://127.0.0.1:8081',
-    'http://localhost:8082',
-    'http://127.0.0.1:8082',
-    'http://localhost:8083',
-    'http://127.0.0.1:8083'
-  ],
+  origin: originOption,
   methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
   allowedHeaders: ['Content-Type','Authorization','Accept','X-XSRF-TOKEN'],
   credentials: true,
@@ -33,8 +45,29 @@ app.use('/api/driver', driverRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/ml', mlRoutes);
 
+const { db } = require('./config/firebase');
+
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', message: 'RapidAid API is running' });
+});
+
+// api-prefixed health route for client-side checks
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', message: 'RapidAid API (API prefix) is running' });
+});
+
+// Check Firestore from the backend using admin SDK
+app.get('/api/health/firestore', async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(200).json({ status: 'skipped', message: 'Firestore not configured on server (set FIREBASE_* env variables)' });
+    }
+    const usersSnapshot = await db.collection('users').limit(1).get();
+    res.json({ status: 'ok', message: 'Firestore reachable', count: usersSnapshot.size });
+  } catch (error) {
+    console.error('❌ Firestore health check failed:', error);
+    res.status(500).json({ status: 'failed', message: 'Failed to reach Firestore', error: error.message });
+  }
 });
 
 // Root route - API information
