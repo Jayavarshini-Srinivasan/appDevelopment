@@ -1,9 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, ScrollView, Alert } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, ScrollView, Alert, SafeAreaView } from 'react-native';
 import { useAuth } from '../context/AuthContext';
 import api from '../services/api';
-import { auth, db } from '../../firebaseConfig';
-import { doc, getDoc } from 'firebase/firestore';
+import { auth } from '../../firebaseConfig';
 
 export default function ProfileScreen() {
   const { userData, logout } = useAuth();
@@ -17,56 +16,32 @@ export default function ProfileScreen() {
   const [fetching, setFetching] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
 
-  // Connectivity states
-  const [backendStatus, setBackendStatus] = useState('unknown'); // 'ok' | 'failed' | 'checking'
-  const [firestoreBackendStatus, setFirestoreBackendStatus] = useState('unknown'); // backend view of Firestore
-  const [firestoreClientStatus, setFirestoreClientStatus] = useState('unknown'); // client SDK connection
-  const [checkingConnectivity, setCheckingConnectivity] = useState(false);
-  const [lastChecked, setLastChecked] = useState(null);
-
   useEffect(() => {
     loadProfile();
   }, []);
 
   const loadProfile = async () => {
     try {
-      console.log('Loading profile data...');
-      console.log('API baseURL:', api.defaults.baseURL);
-      
-      // Load user profile from auth/me
-      console.log('Calling /auth/me...');
       const userResponse = await api.get('/auth/me');
-      console.log('Auth me response:', userResponse.data);
-      
       if (userResponse.data.data) {
         const userInfo = userResponse.data.data;
-        console.log('User info:', userInfo);
         setName(userInfo.name || userInfo.displayName || '');
         setLicense(userInfo.license || userInfo.driverLicense || '');
         setPhone(userInfo.phone || userInfo.phoneNumber || '');
       }
 
-      // Load driver-specific profile
-      console.log('Calling /driver/profile...');
       const driverResponse = await api.get('/driver/profile');
-      console.log('Driver profile response:', driverResponse.data);
-      
       if (driverResponse.data.data) {
         const driverInfo = driverResponse.data.data;
-        console.log('Driver info:', driverInfo);
         setDriverProfile(driverInfo);
         setVehicleType(driverInfo.vehicleType || '');
         setVehicleNumber(driverInfo.vehicleNumber || '');
-        // Prefer driver profile for core fields if present
         setName((driverInfo.name ?? name) || '');
         setLicense((driverInfo.license ?? license) || '');
         setPhone((driverInfo.phone ?? phone) || '');
       }
     } catch (error) {
-      console.error('❌ Error loading profile:', error);
-      console.error('❌ Error response:', error.response?.data);
-      console.error('❌ Error status:', error.response?.status);
-      console.error('❌ Error config:', error.config);
+      console.error('Error loading profile:', error);
       const fallbackUser = userData || (auth.currentUser ? { email: auth.currentUser.email } : null);
       if (fallbackUser) {
         setName(fallbackUser.name || fallbackUser.email || '');
@@ -78,13 +53,9 @@ export default function ProfileScreen() {
           stats: { totalCompleted: 0, completedToday: 0 },
           isOnDuty: false,
         });
-      } else {
-        Alert.alert('Error', `Failed to load profile data: ${error.response?.data?.message || error.message}`);
       }
     } finally {
       setFetching(false);
-      // Run connectivity check after we fetch profile
-      checkConnectivity();
     }
   };
 
@@ -96,14 +67,12 @@ export default function ProfileScreen() {
 
     setLoading(true);
     try {
-      // Update user profile
       await api.put('/auth/profile', {
         name: name.trim(),
         license: license.trim(),
         phone: phone.trim()
       });
 
-      // Update driver profile
       if (vehicleType.trim() || vehicleNumber.trim()) {
         await api.put('/driver/profile', {
           vehicleType: vehicleType.trim(),
@@ -113,14 +82,10 @@ export default function ProfileScreen() {
 
       Alert.alert('Success', 'Profile updated successfully');
       setIsEditing(false);
-      
-      // Reload profile to get updated data
       await loadProfile();
     } catch (error) {
       console.error('Error updating profile:', error);
-      const status = error?.response?.status;
-      const backendMsg = error?.response?.data?.message || error?.message || 'Unknown error';
-      Alert.alert('Error', `Failed to update profile: ${backendMsg}${status ? ` (status ${status})` : ''}`);
+      Alert.alert('Error', 'Failed to update profile');
     } finally {
       setLoading(false);
     }
@@ -128,442 +93,307 @@ export default function ProfileScreen() {
 
   const handleToggleEdit = () => {
     if (isEditing) {
-      // Cancel editing - reload original data
       loadProfile();
     }
     setIsEditing(!isEditing);
   };
 
-  const checkConnectivity = async () => {
-    setCheckingConnectivity(true);
-    setBackendStatus('checking');
-    setFirestoreBackendStatus('checking');
-    setFirestoreClientStatus('checking');
-
-    try {
-      // Backend health check - call root /health (not under /api)
-      try {
-        const baseHost = api.defaults.baseURL.replace(/\/api\/?$/, '');
-        const backendHealthUrl = `${baseHost}/health`;
-        const res = await fetch(backendHealthUrl);
-        setBackendStatus(res.ok ? 'ok' : 'failed');
-      } catch (err) {
-        setBackendStatus('failed');
-        console.error('Backend health check failed:', err);
-      }
-
-      // Backend's Firestore connectivity check, via API endpoint
-      try {
-        const healthFs = await api.get('/health/firestore');
-        setFirestoreBackendStatus(healthFs?.data?.status === 'ok' ? 'ok' : 'failed');
-      } catch (err) {
-        setFirestoreBackendStatus('failed');
-        console.error('Backend firestore check failed:', err);
-      }
-
-      // Client-side Firestore SDK check (attempt to read users/<uid>)
-      try {
-        if (!db) {
-          throw new Error('Firestore client not configured');
-        }
-        const uid = auth?.currentUser?.uid;
-        if (!uid) {
-          // If not logged in, we still consider client SDK initialized
-          setFirestoreClientStatus('ok');
-        } else {
-          const userDocRef = doc(db, 'users', uid);
-          const docSnap = await getDoc(userDocRef);
-          setFirestoreClientStatus(docSnap.exists() ? 'ok' : 'failed');
-        }
-      } catch (err) {
-        setFirestoreClientStatus('failed');
-        console.error('Client Firestore check failed:', err);
-      }
-
-      setLastChecked(new Date());
-    } finally {
-      setCheckingConnectivity(false);
-    }
-  };
-
   if (fetching) {
     return (
-      <View style={styles.container}>
+      <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#0A6CF1" />
       </View>
     );
   }
 
   return (
-    <ScrollView style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Driver Profile</Text>
-        <TouchableOpacity 
-          style={[styles.editButton, isEditing && styles.cancelButton]} 
-          onPress={handleToggleEdit}
-        >
-          <Text style={styles.editButtonText}>
-            {isEditing ? 'Cancel' : 'Edit Profile'}
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Connectivity Status */}
-      <View style={styles.connectivityContainer}>
-        <View style={styles.connectivityItem}>
-          <View style={[styles.connectivityDot, backendStatus === 'ok' ? styles.connected : styles.disconnected]} />
-          <Text style={styles.connectivityLabel}>Backend</Text>
-          <Text style={styles.connectivityValue}>{backendStatus}</Text>
-        </View>
-        <View style={styles.connectivityItem}>
-          <View style={[styles.connectivityDot, firestoreBackendStatus === 'ok' ? styles.connected : styles.disconnected]} />
-          <Text style={styles.connectivityLabel}>Backend → Firestore</Text>
-          <Text style={styles.connectivityValue}>{firestoreBackendStatus}</Text>
-        </View>
-        <View style={styles.connectivityItem}>
-          <View style={[styles.connectivityDot, firestoreClientStatus === 'ok' ? styles.connected : styles.disconnected]} />
-          <Text style={styles.connectivityLabel}>Firestore (Client)</Text>
-          <Text style={styles.connectivityValue}>{firestoreClientStatus}</Text>
-        </View>
-        <TouchableOpacity style={styles.checkButton} onPress={checkConnectivity} disabled={checkingConnectivity}>
-          {checkingConnectivity ? <ActivityIndicator color="#fff" /> : <Text style={styles.checkButtonText}>Check</Text>}
-        </TouchableOpacity>
-      </View>
-      <Text style={styles.lastChecked}>Last checked: {lastChecked ? new Date(lastChecked).toLocaleString() : 'Never'}</Text>
-
-      {/* Driver Summary Card */}
-      {driverProfile && (
-        <View style={styles.summaryCard}>
-          <Text style={styles.summaryTitle}>Driver Summary</Text>
-          <View style={styles.summaryRow}>
-            <View style={styles.summaryItem}>
-              <Text style={styles.summaryValue}>{driverProfile.stats?.totalCompleted || 0}</Text>
-              <Text style={styles.summaryLabel}>Total Emergencies</Text>
-            </View>
-            <View style={styles.summaryItem}>
-              <Text style={styles.summaryValue}>{driverProfile.stats?.completedToday || 0}</Text>
-              <Text style={styles.summaryLabel}>Today</Text>
-            </View>
-            <View style={styles.summaryItem}>
-              <Text style={styles.summaryValue}>{driverProfile.stats?.averageRating || driverProfile.rating || 0}</Text>
-              <Text style={styles.summaryLabel}>Rating</Text>
-            </View>
-          </View>
-        </View>
-      )}
-
-      {/* Personal Information */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Personal Information</Text>
-        
-        <Text style={styles.label}>Email</Text>
-        <TextInput
-          style={[styles.input, styles.disabled]}
-          value={userData?.email || ''}
-          editable={false}
-        />
-        
-        <Text style={styles.label}>Full Name *</Text>
-        <TextInput
-          style={[styles.input, !isEditing && styles.disabled]}
-          value={name}
-          onChangeText={setName}
-          placeholder="Enter your full name"
-          editable={isEditing}
-        />
-        
-        <Text style={styles.label}>Phone Number</Text>
-        <TextInput
-          style={[styles.input, !isEditing && styles.disabled]}
-          value={phone}
-          onChangeText={setPhone}
-          placeholder="+1 (555) 123-4567"
-          editable={isEditing}
-          keyboardType="phone-pad"
-        />
-        
-        <Text style={styles.label}>License Number *</Text>
-        <TextInput
-          style={[styles.input, !isEditing && styles.disabled]}
-          value={license}
-          onChangeText={setLicense}
-          placeholder="Enter your driver license number"
-          editable={isEditing}
-        />
-      </View>
-
-      {/* Vehicle Information */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Vehicle Information</Text>
-        
-        <Text style={styles.label}>Vehicle Type</Text>
-        <TextInput
-          style={[styles.input, !isEditing && styles.disabled]}
-          value={vehicleType}
-          onChangeText={setVehicleType}
-          placeholder="e.g., Ambulance, Medical Transport"
-          editable={isEditing}
-        />
-        
-        <Text style={styles.label}>Vehicle Number</Text>
-        <TextInput
-          style={[styles.input, !isEditing && styles.disabled]}
-          value={vehicleNumber}
-          onChangeText={setVehicleNumber}
-          placeholder="e.g., AMB001, MED002"
-          editable={isEditing}
-        />
-      </View>
-
-      {/* Emergency Statistics */}
-      {driverProfile && (driverProfile.stats?.emergencyTypes || driverProfile.emergencyTypes) && (
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Emergency Response Statistics</Text>
-          <View style={styles.statsContainer}>
-            {Object.entries(driverProfile.stats?.emergencyTypes || driverProfile.emergencyTypes || {}).map(([type, count]) => (
-              <View key={type} style={styles.statItem}>
-                <Text style={styles.statType}>{type}</Text>
-                <Text style={styles.statCount}>{count}</Text>
-              </View>
-            ))}
-          </View>
-        </View>
-      )}
-
-      {/* Action Buttons */}
-      {isEditing ? (
-        <View style={styles.buttonContainer}>
-          <TouchableOpacity 
-            style={[styles.button, styles.saveButton]} 
-            onPress={handleSaveProfile}
-            disabled={loading}
+    <SafeAreaView style={styles.container}>
+      <ScrollView showsVerticalScrollIndicator={false}>
+        <View style={styles.header}>
+          <Text style={styles.headerTitle}>Driver Profile</Text>
+          <TouchableOpacity
+            style={[styles.editButton, isEditing && styles.cancelButton]}
+            onPress={handleToggleEdit}
           >
-            {loading ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={styles.buttonText}>Save Changes</Text>
-            )}
+            <Text style={styles.editButtonText}>
+              {isEditing ? 'Cancel' : 'Edit'}
+            </Text>
           </TouchableOpacity>
         </View>
-      ) : (
-        <TouchableOpacity style={styles.logoutButton} onPress={logout}>
-          <Text style={styles.logoutButtonText}>Logout</Text>
-        </TouchableOpacity>
-      )}
-    </ScrollView>
+
+        {/* Driver Summary Card */}
+        {driverProfile && (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Performance Summary</Text>
+            <View style={styles.statsRow}>
+              <View style={styles.statItem}>
+                <Text style={styles.statValue}>{driverProfile.stats?.totalCompleted || 0}</Text>
+                <Text style={styles.statLabel}>Total Trips</Text>
+              </View>
+              <View style={styles.divider} />
+              <View style={styles.statItem}>
+                <Text style={styles.statValue}>{driverProfile.stats?.completedToday || 0}</Text>
+                <Text style={styles.statLabel}>Today</Text>
+              </View>
+              <View style={styles.divider} />
+              <View style={styles.statItem}>
+                <Text style={styles.statValue}>{driverProfile.stats?.averageRating || driverProfile.rating || '4.8'}</Text>
+                <Text style={styles.statLabel}>Rating</Text>
+              </View>
+            </View>
+          </View>
+        )}
+
+        {/* Personal Information */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Personal Details</Text>
+
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>Email Address</Text>
+            <TextInput
+              style={[styles.input, styles.disabledInput]}
+              value={userData?.email || ''}
+              editable={false}
+            />
+          </View>
+
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>Full Name</Text>
+            <TextInput
+              style={[styles.input, !isEditing && styles.readOnlyInput]}
+              value={name}
+              onChangeText={setName}
+              placeholder="Enter your full name"
+              editable={isEditing}
+            />
+          </View>
+
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>Phone Number</Text>
+            <TextInput
+              style={[styles.input, !isEditing && styles.readOnlyInput]}
+              value={phone}
+              onChangeText={setPhone}
+              placeholder="+1 (555) 000-0000"
+              editable={isEditing}
+              keyboardType="phone-pad"
+            />
+          </View>
+
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>License Number</Text>
+            <TextInput
+              style={[styles.input, !isEditing && styles.readOnlyInput]}
+              value={license}
+              onChangeText={setLicense}
+              placeholder="Driver License Number"
+              editable={isEditing}
+            />
+          </View>
+        </View>
+
+        {/* Vehicle Information */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Vehicle Details</Text>
+
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>Vehicle Type</Text>
+            <TextInput
+              style={[styles.input, !isEditing && styles.readOnlyInput]}
+              value={vehicleType}
+              onChangeText={setVehicleType}
+              placeholder="e.g. Ambulance"
+              editable={isEditing}
+            />
+          </View>
+
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>Vehicle Number</Text>
+            <TextInput
+              style={[styles.input, !isEditing && styles.readOnlyInput]}
+              value={vehicleNumber}
+              onChangeText={setVehicleNumber}
+              placeholder="e.g. AMB-001"
+              editable={isEditing}
+            />
+          </View>
+        </View>
+
+        {/* Action Buttons */}
+        <View style={styles.footer}>
+          {isEditing ? (
+            <TouchableOpacity
+              style={styles.saveButton}
+              onPress={handleSaveProfile}
+              disabled={loading}
+            >
+              {loading ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.saveButtonText}>Save Changes</Text>
+              )}
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity style={styles.logoutButton} onPress={logout}>
+              <Text style={styles.logoutButtonText}>Log Out</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F5F7FA',
+    backgroundColor: '#F8FAFC',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
   },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 15,
-    backgroundColor: '#fff',
+    paddingHorizontal: 24,
+    paddingVertical: 20,
+    backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
+    borderBottomColor: '#E2E8F0',
   },
-  title: {
+  headerTitle: {
     fontSize: 24,
-    fontWeight: 'bold',
-    color: '#0A6CF1',
+    fontWeight: '700',
+    color: '#1E293B',
   },
   editButton: {
-    backgroundColor: '#0A6CF1',
-    paddingHorizontal: 15,
+    paddingHorizontal: 16,
     paddingVertical: 8,
+    backgroundColor: '#EFF6FF',
     borderRadius: 20,
   },
   cancelButton: {
-    backgroundColor: '#6B7280',
+    backgroundColor: '#F1F5F9',
   },
   editButtonText: {
-    color: '#fff',
+    color: '#2563EB',
+    fontWeight: '600',
     fontSize: 14,
-    fontWeight: '600',
   },
-  connectivityContainer: {
-    marginHorizontal: 15,
-    marginTop: 12,
-    backgroundColor: '#fff',
-    padding: 12,
-    borderRadius: 8,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  connectivityItem: {
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  connectivityDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    marginBottom: 4,
-  },
-  connected: {
-    backgroundColor: '#16A34A',
-  },
-  disconnected: {
-    backgroundColor: '#EF4444',
-  },
-  connectivityLabel: {
-    fontSize: 12,
-    color: '#374151',
-  },
-  connectivityValue: {
-    fontSize: 12,
-    color: '#6B7280',
-  },
-  checkButton: {
-    backgroundColor: '#0A6CF1',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    marginLeft: 10,
-  },
-  checkButtonText: {
-    color: '#fff',
-    fontWeight: '600',
-  },
-  lastChecked: {
-    fontSize: 12,
-    color: '#6B7280',
-    marginHorizontal: 15,
-    marginTop: 8,
-    marginBottom: 8,
-  },
-  summaryCard: {
-    backgroundColor: '#fff',
-    margin: 15,
-    padding: 20,
-    borderRadius: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
+  card: {
+    backgroundColor: '#FFFFFF',
+    margin: 20,
+    padding: 24,
+    borderRadius: 16,
+    shadowColor: '#64748B',
+    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    shadowRadius: 12,
+    elevation: 4,
   },
-  summaryTitle: {
+  cardTitle: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#1F2937',
-    marginBottom: 15,
+    color: '#1E293B',
+    marginBottom: 20,
   },
-  summaryRow: {
+  statsRow: {
     flexDirection: 'row',
-    justifyContent: 'space-around',
-  },
-  summaryItem: {
+    justifyContent: 'space-between',
     alignItems: 'center',
   },
-  summaryValue: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#0A6CF1',
+  statItem: {
+    alignItems: 'center',
+    flex: 1,
   },
-  summaryLabel: {
-    fontSize: 12,
-    color: '#6B7280',
-    marginTop: 4,
+  statValue: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#2563EB',
+    marginBottom: 4,
+  },
+  statLabel: {
+    fontSize: 13,
+    color: '#64748B',
+    fontWeight: '500',
+  },
+  divider: {
+    width: 1,
+    height: 40,
+    backgroundColor: '#E2E8F0',
   },
   section: {
-    backgroundColor: '#fff',
-    marginHorizontal: 15,
-    marginVertical: 10,
-    padding: 20,
-    borderRadius: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    paddingHorizontal: 24,
+    marginBottom: 24,
   },
   sectionTitle: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#1F2937',
-    marginBottom: 15,
+    color: '#1E293B',
+    marginBottom: 16,
+  },
+  inputGroup: {
+    marginBottom: 16,
   },
   label: {
     fontSize: 14,
-    fontWeight: '600',
-    color: '#374151',
+    fontWeight: '500',
+    color: '#64748B',
     marginBottom: 8,
-    marginTop: 12,
   },
   input: {
-    backgroundColor: '#F9FAFB',
-    padding: 12,
-    borderRadius: 8,
-    fontSize: 16,
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#E5E7EB',
-  },
-  disabled: {
-    backgroundColor: '#F3F4F6',
-    color: '#6B7280',
-  },
-  statsContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-  },
-  statItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    width: '48%',
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F3F4F6',
-  },
-  statType: {
-    fontSize: 14,
-    color: '#6B7280',
-    flex: 1,
-  },
-  statCount: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#0A6CF1',
-  },
-  buttonContainer: {
-    paddingHorizontal: 20,
-    paddingVertical: 20,
-  },
-  button: {
-    backgroundColor: '#0A6CF1',
-    padding: 16,
+    borderColor: '#E2E8F0',
     borderRadius: 12,
-    alignItems: 'center',
+    padding: 14,
+    fontSize: 16,
+    color: '#1E293B',
+  },
+  readOnlyInput: {
+    backgroundColor: '#F8FAFC',
+    borderColor: 'transparent',
+    color: '#334155',
+  },
+  disabledInput: {
+    backgroundColor: '#F1F5F9',
+    color: '#94A3B8',
+    borderColor: 'transparent',
+  },
+  footer: {
+    padding: 24,
+    paddingBottom: 40,
   },
   saveButton: {
-    backgroundColor: '#10B981',
+    backgroundColor: '#2563EB',
+    paddingVertical: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+    shadowColor: '#2563EB',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 4,
   },
-  buttonText: {
-    color: '#fff',
+  saveButtonText: {
+    color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '600',
   },
   logoutButton: {
-    backgroundColor: '#EF4444',
-    marginHorizontal: 20,
-    marginVertical: 20,
-    padding: 16,
+    backgroundColor: '#FEF2F2',
+    paddingVertical: 16,
     borderRadius: 12,
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#FEE2E2',
   },
   logoutButtonText: {
-    color: '#fff',
+    color: '#EF4444',
     fontSize: 16,
     fontWeight: '600',
   },

@@ -1,5 +1,5 @@
 const driverRepository = require('../repositories/driver.repository');
-const { db } = require('../config/firebase');
+const userRepository = require('../repositories/user.repository');
 const emergencyRepository = require('../repositories/emergency.repository');
 
 const toggleDutyStatus = async (driverId, isOnDuty) => {
@@ -20,13 +20,13 @@ const haversineKm = (a, b) => {
   const dLng = toRad((b.longitude || 0) - (a.longitude || 0));
   const la1 = toRad(a.latitude || 0);
   const la2 = toRad(b.latitude || 0);
-  const h = Math.sin(dLat/2)**2 + Math.cos(la1) * Math.cos(la2) * Math.sin(dLng/2)**2;
-  return 6371 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1-h));
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(la1) * Math.cos(la2) * Math.sin(dLng / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 };
 
 const offsetNear = (origin, km = 2) => {
   const latOff = km / 111;
-  const lngOff = km / (111 * Math.cos((origin.latitude || 0) * Math.PI/180));
+  const lngOff = km / (111 * Math.cos((origin.latitude || 0) * Math.PI / 180));
   const signLat = Math.random() < 0.5 ? -1 : 1;
   const signLng = Math.random() < 0.5 ? -1 : 1;
   return {
@@ -151,7 +151,7 @@ const createStats = async (driverId, statsData) => {
   if (existingStats) {
     throw new Error('Driver stats already exist');
   }
-  
+
   // Create initial stats document
   const initialStats = {
     driverId,
@@ -165,25 +165,23 @@ const createStats = async (driverId, statsData) => {
     createdAt: new Date(),
     updatedAt: new Date()
   };
-  
+
   return await driverRepository.createDriverStats(driverId, initialStats);
 };
 
 const getDriverProfile = async (driverId) => {
-  // Get driver data from users collection
-  const userDoc = await db.collection('users').doc(driverId).get();
-  if (!userDoc.exists) {
+  // Get driver data from users collection using repository
+  const userData = await userRepository.getUserById(driverId);
+  if (!userData) {
     throw new Error('Driver profile not found');
   }
-  
-  const userData = userDoc.data();
-  
+
   // Get driver stats
   const stats = await getStats(driverId);
-  
+
   // Get current duty status from user document
   const isOnDuty = userData.isOnDuty || false;
-  
+
   return {
     ...userData,
     stats,
@@ -193,17 +191,14 @@ const getDriverProfile = async (driverId) => {
 };
 
 const updateDriverProfile = async (driverId, updateData) => {
-  // Update user profile data
-  const userRef = db.collection('users').doc(driverId);
-  
   // Remove fields that shouldn't be updated directly
   const { id, stats, isOnDuty, email, role, createdAt, ...safeUpdateData } = updateData;
-  
-  await userRef.set({
+
+  await userRepository.updateUser(driverId, {
     ...safeUpdateData,
     updatedAt: new Date()
-  }, { merge: true });
-  
+  });
+
   // Return updated profile
   return getDriverProfile(driverId);
 };
@@ -222,4 +217,3 @@ module.exports = {
   updateDriverProfile,
   getCurrentLocation,
 };
-

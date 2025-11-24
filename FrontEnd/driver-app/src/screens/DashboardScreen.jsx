@@ -1,8 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, ScrollView, Alert, Image } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, ScrollView, Alert, SafeAreaView, Platform, StatusBar } from 'react-native';
 import * as Location from 'expo-location';
-import { db } from '../../firebaseConfig';
-import { doc, setDoc } from 'firebase/firestore';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 
@@ -19,8 +17,6 @@ export default function DashboardScreen({ navigation }) {
 
   useEffect(() => {
     if (!user) {
-      console.log('Dashboard: user not logged in, skipping dashboard updates');
-      // Clear dashboard data when logged out
       setStats({ totalCompleted: 0, completedToday: 0, rating: 0 });
       setCurrentLocation(null);
       setPendingRequests(0);
@@ -32,8 +28,7 @@ export default function DashboardScreen({ navigation }) {
     loadDashboardData();
     loadEmergencyRequests();
     loadDutyStatus();
-    
-    // Refresh data every 30 seconds
+
     const interval = setInterval(() => {
       loadDashboardData();
       loadEmergencyRequests();
@@ -50,7 +45,6 @@ export default function DashboardScreen({ navigation }) {
     }
   }, [isOnDuty]);
 
-  // Cleanup watcher on unmount
   useEffect(() => {
     return () => {
       stopLocationTracking();
@@ -69,30 +63,22 @@ export default function DashboardScreen({ navigation }) {
 
   const loadDashboardData = async () => {
     try {
-      console.log('📊 Loading dashboard data...');
-      console.log('API baseURL:', api.defaults.baseURL);
       const [statsResponse, locationResponse] = await Promise.all([
         api.get('/driver/stats'),
         api.get('/driver/location/current')
       ]);
-      
-      console.log('📈 Stats response:', statsResponse.data);
-      console.log('📍 Location response:', locationResponse.data);
-      
+
       if (statsResponse.data.data) {
         setStats(statsResponse.data.data);
       }
-      
+
       if (locationResponse && locationResponse.data && typeof locationResponse.data.data !== 'undefined') {
         setCurrentLocation(locationResponse.data.data);
       } else {
-        console.warn('⚠️ Location response missing data:', locationResponse?.data || locationResponse);
         setCurrentLocation(null);
       }
     } catch (error) {
-      console.error('❌ Error loading dashboard data:', error.message || error);
-      console.error('❌ Error response:', error.response?.data);
-      console.error('❌ Error status:', error.response?.status);
+      console.error('Error loading dashboard data:', error.message || error);
     }
   };
 
@@ -102,7 +88,7 @@ export default function DashboardScreen({ navigation }) {
         api.get('/driver/requests/pending'),
         api.get('/driver/requests/assigned')
       ]);
-      
+
       setPendingRequests(pendingResponse.data.data?.length || 0);
       setAssignedRequests(assignedResponse.data.data?.length || 0);
     } catch (error) {
@@ -112,21 +98,13 @@ export default function DashboardScreen({ navigation }) {
 
   const loadDutyStatus = async () => {
     try {
-      console.log('🔄 Loading duty status...');
-      // Try to get duty status from driver profile
       const profileResponse = await api.get('/driver/profile');
-      console.log('✅ Profile response:', profileResponse.data);
-      
       if (profileResponse.data.data) {
         const dutyStatus = profileResponse.data.data.isOnDuty || false;
-        console.log('🎯 Setting duty status to:', dutyStatus);
         setIsOnDuty(dutyStatus);
       }
     } catch (error) {
-      console.error('❌ Error loading duty status:', error);
-      console.error('❌ Error response:', error.response?.data);
-      console.error('❌ Error status:', error.response?.status);
-      // If profile endpoint fails, duty status will remain false (default)
+      console.error('Error loading duty status:', error);
     }
   };
 
@@ -136,9 +114,11 @@ export default function DashboardScreen({ navigation }) {
     setIsOnDuty(newStatus);
     try {
       await api.post('/driver/duty/toggle', { isOnDuty: newStatus });
-      Alert.alert('Success', newStatus ? 'You are now ON DUTY' : 'You are now OFF DUTY');
+      Alert.alert('Status Updated', newStatus ? 'You are now ON DUTY' : 'You are now OFF DUTY');
     } catch (error) {
-      console.error('❌ Error toggling duty:', error.response?.data || error.message);
+      console.error('Error toggling duty:', error.response?.data || error.message);
+      setIsOnDuty(!newStatus); // Revert on error
+      Alert.alert('Error', 'Failed to update duty status');
     } finally {
       setLoading(false);
     }
@@ -152,38 +132,38 @@ export default function DashboardScreen({ navigation }) {
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Warning', 'Location permission not granted. Duty is ON, tracking disabled.');
+        Alert.alert('Permission Denied', 'Location permission is required for duty mode.');
+        setIsOnDuty(false);
         return;
       }
 
       setIsTracking(true);
-      
-      // Get current location immediately
+
       const currentLocation = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.High
       });
-      
+
       await updateDriverLocation(currentLocation.coords);
 
-      // Watch for location changes
       const sub = await Location.watchPositionAsync(
         {
           accuracy: Location.Accuracy.High,
-          timeInterval: 10000, // Update every 10 seconds
-          distanceInterval: 20, // Update when moved 20 meters
+          timeInterval: 10000,
+          distanceInterval: 20,
         },
         async (location) => {
           await updateDriverLocation(location.coords);
         }
       );
-      // Save subscription so we can stop watching later
+
       if (watchRef.current) {
-        try { await watchRef.current.remove(); } catch {}
+        try { await watchRef.current.remove(); } catch { }
       }
       watchRef.current = sub;
     } catch (error) {
       console.error('Error starting location tracking:', error);
       Alert.alert('Error', 'Failed to start location tracking');
+      setIsOnDuty(false);
     }
   };
 
@@ -192,28 +172,23 @@ export default function DashboardScreen({ navigation }) {
     if (watchRef.current) {
       try {
         watchRef.current.remove();
-      } catch {}
+      } catch { }
       watchRef.current = null;
     }
   };
 
   const updateDriverLocation = async (coords) => {
-    if (!user) {
-      console.warn('Skipping updateDriverLocation - user not logged in');
-      return;
-    }
+    if (!user) return;
     try {
       const { latitude, longitude } = coords;
-      // Update via API only (avoid client Firestore writes on mobile)
-      await api.post('/driver/location', { 
-        latitude, 
+      await api.post('/driver/location', {
+        latitude,
         longitude,
-        isOnDuty: isOnDuty 
+        isOnDuty: isOnDuty
       });
-      
       setCurrentLocation({ latitude, longitude });
     } catch (error) {
-      console.error('Error updating location via API:', error.response?.data || error.message);
+      console.error('Error updating location:', error.message);
     }
   };
 
@@ -225,166 +200,161 @@ export default function DashboardScreen({ navigation }) {
     navigation.navigate('Profile');
   };
 
-  const getDutyButtonStyle = () => {
-    return isOnDuty ? styles.dutyButtonActive : styles.dutyButtonInactive;
-  };
-
-  const getDutyStatusText = () => {
-    return isOnDuty ? 'ON DUTY' : 'OFF DUTY';
-  };
-
   const getLocationStatus = () => {
-    if (!isOnDuty) return 'Not tracking (Off Duty)';
-    if (currentLocation) return 'Location Active';
-    if (isTracking) return 'Acquiring location...';
-    return 'Location unavailable';
+    if (!isOnDuty) return 'Offline';
+    if (currentLocation) return 'Active';
+    if (isTracking) return 'Acquiring...';
+    return 'Unavailable';
   };
 
   return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
-      {/* Header */}
-      <View style={styles.header}>
-        <Text style={styles.welcomeText}>Welcome Back!</Text>
-        <Text style={styles.driverName}>{user?.email || 'Driver'}</Text>
-      </View>
+    <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="light-content" backgroundColor="#0A6CF1" />
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+        {/* Header */}
+        <View style={styles.header}>
+          <View>
+            <Text style={styles.welcomeLabel}>Welcome back,</Text>
+            <Text style={styles.driverName}>{user?.email?.split('@')[0] || 'Driver'}</Text>
+          </View>
+          <TouchableOpacity style={styles.profileButton} onPress={handleViewProfile}>
+            <Text style={styles.profileButtonText}>{user?.email?.[0]?.toUpperCase() || 'D'}</Text>
+          </TouchableOpacity>
+        </View>
 
-      {/* Duty Status Card */}
-      <View style={styles.dutyCard}>
-        <View style={styles.dutyStatusContainer}>
-          <View style={[styles.statusIndicator, isOnDuty ? styles.statusActive : styles.statusInactive]} />
-          <View style={styles.dutyTextContainer}>
-            <Text style={styles.dutyStatusTitle}>Duty Status</Text>
-            <Text style={[styles.dutyStatusValue, isOnDuty ? styles.dutyActiveText : styles.dutyInactiveText]}>
-              {getDutyStatusText()}
-            </Text>
+        {/* Duty Status Card */}
+        <View style={styles.dutyCard}>
+          <View style={styles.dutyHeader}>
+            <View style={styles.dutyStatusContainer}>
+              <View style={[styles.statusDot, isOnDuty ? styles.statusDotActive : styles.statusDotInactive]} />
+              <Text style={styles.dutyStatusText}>
+                {isOnDuty ? 'You are Online' : 'You are Offline'}
+              </Text>
+            </View>
+            {isOnDuty && (
+              <View style={styles.locationBadge}>
+                <Text style={styles.locationBadgeText}>GPS {getLocationStatus()}</Text>
+              </View>
+            )}
+          </View>
+
+          <Text style={styles.dutyDescription}>
+            {isOnDuty
+              ? 'You are visible to nearby emergencies. Stay alert for incoming requests.'
+              : 'Go online to start receiving emergency requests.'}
+          </Text>
+
+          <TouchableOpacity
+            style={[styles.dutyButton, isOnDuty ? styles.dutyButtonActive : styles.dutyButtonInactive]}
+            onPress={toggleDuty}
+            disabled={loading}
+          >
+            {loading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.dutyButtonText}>
+                {isOnDuty ? 'GO OFFLINE' : 'GO ONLINE'}
+              </Text>
+            )}
+          </TouchableOpacity>
+        </View>
+
+        {/* Statistics Cards */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Today's Overview</Text>
+          <View style={styles.statsGrid}>
+            <View style={styles.statCard}>
+              <Text style={styles.statValue}>{stats.completedToday}</Text>
+              <Text style={styles.statLabel}>Trips</Text>
+            </View>
+            <View style={styles.statCard}>
+              <Text style={styles.statValue}>{stats.rating || '4.8'}</Text>
+              <Text style={styles.statLabel}>Rating</Text>
+            </View>
+            <View style={styles.statCard}>
+              <Text style={styles.statValue}>{pendingRequests}</Text>
+              <Text style={styles.statLabel}>Pending</Text>
+            </View>
+            <View style={styles.statCard}>
+              <Text style={styles.statValue}>{assignedRequests}</Text>
+              <Text style={styles.statLabel}>Active</Text>
+            </View>
           </View>
         </View>
-        
-        <TouchableOpacity
-          style={[styles.dutyButton, getDutyButtonStyle()]}
-          onPress={toggleDuty}
-          disabled={loading}
-        >
-          {loading ? (
-            <ActivityIndicator color="#fff" size="small" />
+
+        {/* Emergency Requests */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Requests</Text>
+
+          {isOnDuty ? (
+            <View>
+              <TouchableOpacity
+                style={styles.requestCard}
+                onPress={handleViewRequests}
+              >
+                <View style={[styles.iconContainer, styles.iconPending]}>
+                  <Text style={styles.iconText}>🚨</Text>
+                </View>
+                <View style={styles.requestInfo}>
+                  <Text style={styles.requestTitle}>New Emergencies</Text>
+                  <Text style={styles.requestSubtitle}>{pendingRequests} waiting for acceptance</Text>
+                </View>
+                <View style={styles.arrowContainer}>
+                  <Text style={styles.arrowText}>›</Text>
+                </View>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.requestCard}
+                onPress={handleViewRequests}
+              >
+                <View style={[styles.iconContainer, styles.iconActive]}>
+                  <Text style={styles.iconText}>📍</Text>
+                </View>
+                <View style={styles.requestInfo}>
+                  <Text style={styles.requestTitle}>Active Missions</Text>
+                  <Text style={styles.requestSubtitle}>{assignedRequests} currently in progress</Text>
+                </View>
+                <View style={styles.arrowContainer}>
+                  <Text style={styles.arrowText}>›</Text>
+                </View>
+              </TouchableOpacity>
+            </View>
           ) : (
-            <Text style={styles.dutyButtonText}>
-              {isOnDuty ? 'Go Off Duty' : 'Go On Duty'}
-            </Text>
-          )}
-        </TouchableOpacity>
-      </View>
-
-      {/* Location Status */}
-      {isOnDuty && (
-        <View style={styles.locationCard}>
-          <View style={styles.locationHeader}>
-            <Text style={styles.locationTitle}>Location Status</Text>
-            <View style={[styles.locationIndicator, isTracking ? styles.locationActive : styles.locationInactive]} />
-          </View>
-          <Text style={styles.locationStatus}>{getLocationStatus()}</Text>
-          {currentLocation && (
-            <Text style={styles.locationCoords}>
-              {currentLocation.latitude.toFixed(4)}, {currentLocation.longitude.toFixed(4)}
-            </Text>
+            <View style={styles.offlineState}>
+              <Text style={styles.offlineStateText}>Go online to view requests</Text>
+            </View>
           )}
         </View>
-      )}
 
-      {/* Statistics Cards */}
-      <View style={styles.statsSection}>
-        <Text style={styles.sectionTitle}>Today's Performance</Text>
-        <View style={styles.statsGrid}>
-          <View style={styles.statCard}>
-            <Text style={styles.statNumber}>{stats.completedToday}</Text>
-            <Text style={styles.statLabel}>Completed</Text>
-          </View>
-          <View style={styles.statCard}>
-            <Text style={styles.statNumber}>{stats.totalCompleted}</Text>
-            <Text style={styles.statLabel}>Total</Text>
-          </View>
-          <View style={styles.statCard}>
-            <Text style={styles.statNumber}>{stats.rating || '4.8'}</Text>
-            <Text style={styles.statLabel}>Rating</Text>
-          </View>
-          <View style={styles.statCard}>
-            <Text style={styles.statNumber}>{pendingRequests}</Text>
-            <Text style={styles.statLabel}>Pending</Text>
-          </View>
-        </View>
-      </View>
-
-      {/* Emergency Requests */}
-      <View style={styles.requestsSection}>
-        <Text style={styles.sectionTitle}>Emergency Requests</Text>
-        
-        {isOnDuty ? (
-          <View style={styles.requestsContainer}>
-            <TouchableOpacity
-              style={styles.requestCard}
-              onPress={handleViewRequests}
-            >
-              <View style={styles.requestIconContainer}>
-                <Text style={styles.requestIcon}>🚨</Text>
+        {/* Quick Actions */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Quick Actions</Text>
+          <View style={styles.actionsRow}>
+            <TouchableOpacity style={styles.actionButton} onPress={handleViewProfile}>
+              <View style={styles.actionIconBg}>
+                <Text style={styles.actionIcon}>👤</Text>
               </View>
-              <View style={styles.requestInfo}>
-                <Text style={styles.requestTitle}>Pending Requests</Text>
-                <Text style={styles.requestCount}>{pendingRequests} requests</Text>
-              </View>
-              <Text style={styles.requestArrow}>›</Text>
+              <Text style={styles.actionLabel}>Profile</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity
-              style={[styles.requestCard, styles.assignedCard]}
-              onPress={handleViewRequests}
-            >
-              <View style={styles.requestIconContainer}>
-                <Text style={styles.requestIcon}>📍</Text>
+            <TouchableOpacity style={styles.actionButton} onPress={() => navigation.navigate('History')}>
+              <View style={styles.actionIconBg}>
+                <Text style={styles.actionIcon}>📊</Text>
               </View>
-              <View style={styles.requestInfo}>
-                <Text style={styles.requestTitle}>Assigned to You</Text>
-                <Text style={styles.requestCount}>{assignedRequests} active</Text>
+              <Text style={styles.actionLabel}>History</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.actionButton} onPress={() => navigation.navigate('AssignedRequests')}>
+              <View style={styles.actionIconBg}>
+                <Text style={styles.actionIcon}>🗺️</Text>
               </View>
-              <Text style={styles.requestArrow}>›</Text>
+              <Text style={styles.actionLabel}>Map</Text>
             </TouchableOpacity>
           </View>
-        ) : (
-          <View style={styles.offDutyMessage}>
-            <Text style={styles.offDutyText}>Go on duty to see emergency requests</Text>
-          </View>
-        )}
-      </View>
-
-      {/* Quick Actions */}
-      <View style={styles.actionsSection}>
-        <Text style={styles.sectionTitle}>Quick Actions</Text>
-        <View style={styles.actionsGrid}>
-          <TouchableOpacity
-            style={styles.actionButton}
-            onPress={handleViewProfile}
-          >
-            <Text style={styles.actionIcon}>👤</Text>
-            <Text style={styles.actionText}>Profile</Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity
-            style={styles.actionButton}
-            onPress={handleViewRequests}
-          >
-            <Text style={styles.actionIcon}>📋</Text>
-            <Text style={styles.actionText}>Requests</Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity
-            style={styles.actionButton}
-            onPress={() => navigation.navigate('History')}
-          >
-            <Text style={styles.actionIcon}>📊</Text>
-            <Text style={styles.actionText}>History</Text>
-          </TouchableOpacity>
         </View>
-      </View>
-    </ScrollView>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
@@ -393,204 +363,183 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#F8FAFC',
   },
+  scrollContent: {
+    paddingBottom: 40,
+  },
   header: {
     backgroundColor: '#0A6CF1',
-    paddingHorizontal: 20,
-    paddingVertical: 30,
-    borderBottomLeftRadius: 20,
-    borderBottomRightRadius: 20,
+    paddingHorizontal: 24,
+    paddingTop: Platform.OS === 'android' ? 40 : 20,
+    paddingBottom: 30,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
   },
-  welcomeText: {
-    fontSize: 16,
+  welcomeLabel: {
+    fontSize: 14,
     color: '#E0E7FF',
-    marginBottom: 4,
+    fontWeight: '500',
   },
   driverName: {
     fontSize: 24,
-    fontWeight: 'bold',
+    fontWeight: '700',
+    color: '#FFFFFF',
+    marginTop: 4,
+  },
+  profileButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
+  },
+  profileButtonText: {
+    fontSize: 18,
+    fontWeight: '700',
     color: '#FFFFFF',
   },
   dutyCard: {
     backgroundColor: '#FFFFFF',
     marginHorizontal: 20,
-    marginVertical: 15,
-    padding: 20,
-    borderRadius: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
+    marginTop: -20,
+    borderRadius: 20,
+    padding: 24,
+    shadowColor: '#64748B',
+    shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 5,
+    shadowRadius: 16,
+    elevation: 8,
+  },
+  dutyHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
   },
   dutyStatusContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 20,
   },
-  statusIndicator: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    marginRight: 12,
+  statusDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    marginRight: 8,
   },
-  statusActive: {
+  statusDotActive: {
     backgroundColor: '#10B981',
   },
-  statusInactive: {
+  statusDotInactive: {
     backgroundColor: '#EF4444',
   },
-  dutyTextContainer: {
-    flex: 1,
+  dutyStatusText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#1E293B',
   },
-  dutyStatusTitle: {
-    fontSize: 14,
-    color: '#6B7280',
-    marginBottom: 2,
+  locationBadge: {
+    backgroundColor: '#F1F5F9',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
   },
-  dutyStatusValue: {
-    fontSize: 18,
+  locationBadgeText: {
+    fontSize: 10,
     fontWeight: '600',
+    color: '#64748B',
   },
-  dutyActiveText: {
-    color: '#10B981',
-  },
-  dutyInactiveText: {
-    color: '#EF4444',
+  dutyDescription: {
+    fontSize: 14,
+    color: '#64748B',
+    marginBottom: 20,
+    lineHeight: 20,
   },
   dutyButton: {
-    paddingVertical: 14,
-    paddingHorizontal: 24,
+    paddingVertical: 16,
     borderRadius: 12,
     alignItems: 'center',
-  },
-  dutyButtonInactive: {
-    backgroundColor: '#10B981',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 4,
   },
   dutyButtonActive: {
     backgroundColor: '#EF4444',
   },
+  dutyButtonInactive: {
+    backgroundColor: '#10B981',
+  },
   dutyButtonText: {
     color: '#FFFFFF',
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '700',
+    letterSpacing: 0.5,
   },
-  locationCard: {
-    backgroundColor: '#FFFFFF',
-    marginHorizontal: 20,
-    marginBottom: 15,
-    padding: 16,
-    borderRadius: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  locationHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  locationTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1F2937',
-    flex: 1,
-  },
-  locationIndicator: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginLeft: 8,
-  },
-  locationActive: {
-    backgroundColor: '#10B981',
-  },
-  locationInactive: {
-    backgroundColor: '#EF4444',
-  },
-  locationStatus: {
-    fontSize: 14,
-    color: '#6B7280',
-    marginBottom: 4,
-  },
-  locationCoords: {
-    fontSize: 12,
-    color: '#9CA3AF',
-    fontFamily: 'monospace',
-  },
-  statsSection: {
-    marginBottom: 20,
+  section: {
+    marginTop: 24,
+    paddingHorizontal: 20,
   },
   sectionTitle: {
     fontSize: 18,
-    fontWeight: '600',
-    color: '#1F2937',
-    marginHorizontal: 20,
-    marginBottom: 12,
+    fontWeight: '700',
+    color: '#1E293B',
+    marginBottom: 16,
   },
   statsGrid: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    paddingHorizontal: 15,
+    justifyContent: 'space-between',
   },
   statCard: {
     backgroundColor: '#FFFFFF',
     width: '23%',
-    margin: 4,
-    padding: 16,
+    padding: 12,
     borderRadius: 12,
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
   },
-  statNumber: {
-    fontSize: 20,
-    fontWeight: 'bold',
+  statValue: {
+    fontSize: 18,
+    fontWeight: '700',
     color: '#0A6CF1',
     marginBottom: 4,
   },
   statLabel: {
-    fontSize: 12,
-    color: '#6B7280',
-    textAlign: 'center',
-  },
-  requestsSection: {
-    marginBottom: 20,
-  },
-  requestsContainer: {
-    paddingHorizontal: 20,
+    fontSize: 11,
+    color: '#64748B',
+    fontWeight: '500',
   },
   requestCard: {
     backgroundColor: '#FFFFFF',
     flexDirection: 'row',
     alignItems: 'center',
     padding: 16,
-    borderRadius: 12,
+    borderRadius: 16,
     marginBottom: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
   },
-  assignedCard: {
-    borderLeftWidth: 4,
-    borderLeftColor: '#10B981',
-  },
-  requestIconContainer: {
+  iconContainer: {
     width: 48,
     height: 48,
     borderRadius: 24,
-    backgroundColor: '#F3F4F6',
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 16,
   },
-  requestIcon: {
+  iconPending: {
+    backgroundColor: '#FEF2F2',
+  },
+  iconActive: {
+    backgroundColor: '#EFF6FF',
+  },
+  iconText: {
     fontSize: 24,
   },
   requestInfo: {
@@ -599,56 +548,64 @@ const styles = StyleSheet.create({
   requestTitle: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#1F2937',
-    marginBottom: 4,
+    color: '#1E293B',
+    marginBottom: 2,
   },
-  requestCount: {
-    fontSize: 14,
-    color: '#6B7280',
+  requestSubtitle: {
+    fontSize: 13,
+    color: '#64748B',
   },
-  requestArrow: {
-    fontSize: 24,
-    color: '#9CA3AF',
-  },
-  offDutyMessage: {
-    backgroundColor: '#F3F4F6',
-    marginHorizontal: 20,
-    padding: 20,
-    borderRadius: 12,
+  arrowContainer: {
+    width: 32,
+    height: 32,
+    justifyContent: 'center',
     alignItems: 'center',
   },
-  offDutyText: {
-    fontSize: 16,
-    color: '#6B7280',
-    textAlign: 'center',
+  arrowText: {
+    fontSize: 20,
+    color: '#94A3B8',
+    fontWeight: '600',
   },
-  actionsSection: {
-    marginBottom: 30,
+  offlineState: {
+    backgroundColor: '#F1F5F9',
+    padding: 24,
+    borderRadius: 16,
+    alignItems: 'center',
+    borderStyle: 'dashed',
+    borderWidth: 2,
+    borderColor: '#E2E8F0',
   },
-  actionsGrid: {
+  offlineStateText: {
+    color: '#64748B',
+    fontWeight: '500',
+  },
+  actionsRow: {
     flexDirection: 'row',
     justifyContent: 'space-around',
-    paddingHorizontal: 20,
-  },
-  actionButton: {
     backgroundColor: '#FFFFFF',
     paddingVertical: 20,
-    paddingHorizontal: 24,
-    borderRadius: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  actionButton: {
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
+  },
+  actionIconBg: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#F8FAFC',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 8,
   },
   actionIcon: {
     fontSize: 24,
-    marginBottom: 8,
   },
-  actionText: {
-    fontSize: 14,
-    color: '#374151',
+  actionLabel: {
+    fontSize: 12,
     fontWeight: '500',
+    color: '#475569',
   },
 });
